@@ -1,0 +1,213 @@
+package base
+
+import (
+	"context"
+	"errors"
+	"sync"
+
+	"github.com/zhang0125/market-watcher/pkg/log"
+)
+
+var (
+	// errAlreadyStopped is returned when somebody tries to stop an already
+	// stopped service (without resetting it).
+	errAlreadyStopped = errors.New("already stopped")
+)
+
+var (
+	_ Service = (*BaseService)(nil)
+	_ Service = (*NopService)(nil)
+)
+
+// Service defines a service that can be started, stopped, and reset.
+type Service interface {
+	// Start is called to start the service, which should run until
+	// the context terminates. If the service is already running, Start
+	// must report an error.
+	Start(context.Context) error
+
+	// Return true if the service is running
+	IsRunning() bool
+
+	// Wait blocks until the service is stopped.
+	Wait()
+
+	// Stop
+	Stop()
+}
+
+// Implementation describes the implementation that the
+// BaseService implementation wraps.
+type Implementation interface {
+	// Called by the Services Start Method
+	OnStart(context.Context) error
+
+	// Called when the service's context is canceled.
+	OnStop()
+}
+
+/*
+Classical-inheritance-style service declarations. Services can be started, then
+stopped, but cannot be restarted.
+
+Users must implement OnStart/OnStop methods. In the absence of errors, these
+methods are guaranteed to be called at most once. If OnStart returns an error,
+service won't be marked as started, so the user can call Start again.
+
+The BaseService implementation ensures that the OnStop method is
+called after the context passed to Start is canceled.
+
+Typical usage:
+
+	type FooService struct {
+		BaseService
+		// private fields
+	}
+
+	func NewFooService() *FooService {
+		fs := &FooService{
+			// init
+		}
+		fs.BaseService = *NewBaseService(log, "FooService", fs)
+		return fs
+	}
+
+	func (fs *FooService) OnStart(ctx context.Context) error {
+		// initialize private fields
+		// start subroutines, etc.
+	}
+
+	func (fs *FooService) OnStop() {
+		// close/destroy private fields
+		// stop subroutines, etc.
+	}
+*/
+type BaseService struct {
+	Logger log.Logger
+	Name   string
+	mtx    sync.Mutex
+	quit   <-chan (struct{})
+	cancel context.CancelFunc
+
+	// The "subclass" of BaseService
+	impl Implementation
+}
+
+type NopService struct{}
+
+func (NopService) Start(_ context.Context) error { return nil }
+func (NopService) IsRunning() bool               { return true }
+func (NopService) Wait()                         {}
+func (NopService) Stop()                         {}
+
+// NewBaseService creates a new BaseService.
+func NewBaseService(logger log.Logger, name string, impl Implementation) *BaseService {
+	return &BaseService{
+		Logger: logger,
+		Name:   name,
+		impl:   impl,
+	}
+}
+
+// Start starts the Service and calls its OnStart method. An error
+// will be returned if the service is stopped, but not if it is
+// already running.
+func (bs *BaseService) Start(ctx context.Context) error {
+	bs.mtx.Lock()
+	defer bs.mtx.Unlock()
+
+	if bs.quit != nil {
+		return nil
+	}
+
+	select {
+	case <-bs.quit:
+		return errAlreadyStopped
+	default:
+		bs.Logger.Info("starting service", "service", bs.Name, "impl", bs.Name)
+		if err := bs.impl.OnStart(ctx); err != nil {
+			return err
+		}
+
+		// we need a separate context to ensure that we start
+		// a thread that will get cleaned up and that the
+		// Stop/Wait functions work as expected.
+		srvCtx, cancel := context.WithCancel(context.Background())
+		bs.cancel = cancel
+		bs.quit = srvCtx.Done()
+
+		go func(ctx context.Context) {
+			select {
+			case <-srvCtx.Done():
+				// this means stop was called manually
+				return
+			case <-ctx.Done():
+				bs.Stop()
+			}
+
+			bs.Logger.Info("stopped service", "service", bs.Name)
+		}(ctx)
+
+		return nil
+	}
+}
+
+// Stop manually terminates the service by calling OnStop method from
+// the implementation and releases all resources related to the
+// service.
+func (bs *BaseService) Stop() {
+	bs.mtx.Lock()
+	defer bs.mtx.Unlock()
+
+	if bs.quit == nil {
+		return
+	}
+
+	select {
+	case <-bs.quit:
+		return
+	default:
+		bs.Logger.Info("stopping service", "service", bs.Name)
+		bs.impl.OnStop()
+		bs.cancel()
+
+		return
+	}
+}
+
+// IsRunning implements Service by returning true or false depending on the
+// service's state.
+func (bs *BaseService) IsRunning() bool {
+	bs.mtx.Lock()
+	defer bs.mtx.Unlock()
+
+	if bs.quit == nil {
+		return false
+	}
+
+	select {
+	case <-bs.quit:
+		return false
+	default:
+		return true
+	}
+}
+
+func (bs *BaseService) getWait() <-chan struct{} {
+	bs.mtx.Lock()
+	defer bs.mtx.Unlock()
+
+	if bs.quit == nil {
+		out := make(chan struct{})
+		close(out)
+		return out
+	}
+
+	return bs.quit
+}
+
+// Wait blocks until the service is stopped.
+func (bs *BaseService) Wait() { <-bs.getWait() }
+
+// String implements Service by returning a string representation of the service.
+func (bs *BaseService) String() string { return bs.Name }

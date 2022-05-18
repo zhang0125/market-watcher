@@ -1,0 +1,9 @@
+
+.idea
+.DS_Store
+
+conf/local.toml
+
+logs
+
+market-watcher

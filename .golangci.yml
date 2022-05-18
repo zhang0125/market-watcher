@@ -1,0 +1,50 @@
+linters-settings:
+  golint:
+    min-confidence: 0
+  misspell:
+    locale: US
+linters:
+  disable-all: true
+  enable:
+    - typecheck
+    - govet
+    - ineffassign
+    - deadcode
+    - asciicheck
+    - depguard
+    - dogsled
+    - durationcheck
+    - errcheck
+    - errorlint
+    - exportloopref
+    - gci
+    - gofmt
+    - goimports
+    - gosec
+    - misspell
+    - nakedret
+    - nilerr
+    - nolintlint
+    - revive
+    - wastedassign
+
+issues:
+  exclude-rules:
+    - linters:
+        - revive
+      text: "exported:"
+    - linters:
+        - gosec
+      text: "G501:"
+    - linters:
+        - gosec
+      text: "G404:"
+    - linters:
+        - gosec
+      text: "G401:"
+    - path: _test\.go
+      linters:
+        - gosec # security is not make sense in tests
+
+service:
+  golangci-lint-version: 1.39.0 # use the fixed version to not introduce new linters unexpectedly

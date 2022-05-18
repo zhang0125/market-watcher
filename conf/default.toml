@@ -1,0 +1,9 @@
+dsn = "user:pass@tcp(127.0.0.1:3306)/dbname?charset=utf8mb4&parseTime=True&loc=Local"
+
+symbols = ["trxusdt","btcusdt","bnbusdt"]
+
+[serve]
+[serve.kline]
+Enable = true
+Interval = "1m"
+
