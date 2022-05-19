@@ -46,23 +46,15 @@ var errHandler = func(err error) {
 
 func klineFetch(wg *sync.WaitGroup) {
 	defer wg.Done()
-	preEvents := make(map[string]*binance.WsKlineEvent)
 	wsKlineHandler := func(event *binance.WsKlineEvent) {
-		defer func() {
-			preEvents[event.Symbol] = event
-		}()
-		preEvent, ok := preEvents[event.Symbol]
-		if !ok {
-			return
-		}
-		if preEvent.Kline.FirstTradeID == event.Kline.FirstTradeID {
+		if !event.Kline.IsFinal {
 			// Waiting for data completion
 			return
 		}
-		if err := binancemodel.CreateKline(preEvent); err != nil {
-			log.Log.Error("save kline", err)
+		if err := binancemodel.CreateKline(event); err != nil {
+			log.Log.Error("save kline failed", err)
 		}
-		fmt.Println(preEvent)
+		log.Log.Info("event", event)
 	}
 	klineServe, ok := util.GetConfig().Serve["kline"]
 	if !ok || !klineServe.Enable {
