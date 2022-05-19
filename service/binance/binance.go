@@ -34,43 +34,50 @@ func (t *Service) OnStart(ctx context.Context) error {
 }
 
 func (t *Service) StartFetch(ctx context.Context) {
-	errHandler := func(err error) {
-		fmt.Println(err)
-	}
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		wsKlineHandler := func(event *binance.WsKlineEvent) {
-			if err := binancemodel.CreateKline(event); err != nil {
-				log.Log.Error("save kline", err)
-			}
-		}
-		klineServe, ok := util.GetConfig().Serve["kline"]
-		if !ok || !klineServe.Enable {
-			return
-		}
-		symbols := util.GetConfig().Symbols
-		interval := klineServe.Interval
-		symbolIntervalPair := make(map[string]string, len(symbols))
-		for _, symbol := range symbols {
-			symbolIntervalPair[symbol] = interval
-		}
-		doneC, _, err := binance.WsCombinedKlineServe(symbolIntervalPair, wsKlineHandler, errHandler)
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-		<-doneC
-	}()
-	//go func() {
-	//	defer wg.Done()
-	//	doneC, _, err := binancemodel.WsCombinedMarketStatServe(map[string]string{"TRXUSDT": "1m", "BTCUSDT": "1m"}, wsKlineHandler, errHandler)
-	//	if err != nil {
-	//		fmt.Println(err)
-	//		return
-	//	}
-	//	<-doneC
-	//}()
+	go klineFetch(&wg)
 	wg.Wait()
+}
+
+var errHandler = func(err error) {
+	fmt.Println(err)
+}
+
+func klineFetch(wg *sync.WaitGroup) {
+	defer wg.Done()
+	preEvents := make(map[string]*binance.WsKlineEvent)
+	wsKlineHandler := func(event *binance.WsKlineEvent) {
+		defer func() {
+			preEvents[event.Symbol] = event
+		}()
+		preEvent, ok := preEvents[event.Symbol]
+		if !ok {
+			return
+		}
+		if preEvent.Kline.FirstTradeID == event.Kline.FirstTradeID {
+			// Waiting for data completion
+			return
+		}
+		if err := binancemodel.CreateKline(preEvent); err != nil {
+			log.Log.Error("save kline", err)
+		}
+		fmt.Println(preEvent)
+	}
+	klineServe, ok := util.GetConfig().Serve["kline"]
+	if !ok || !klineServe.Enable {
+		return
+	}
+	symbols := util.GetConfig().Symbols
+	interval := klineServe.Interval
+	symbolIntervalPair := make(map[string]string, len(symbols))
+	for _, symbol := range symbols {
+		symbolIntervalPair[symbol] = interval
+	}
+	doneC, _, err := binance.WsCombinedKlineServe(symbolIntervalPair, wsKlineHandler, errHandler)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	<-doneC
 }
